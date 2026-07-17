@@ -154,6 +154,24 @@ describe('cleanAvi — JUNK-in-place', () => {
     expect(report.fields.some(f => f.tag === 'Phần mềm')).toBe(true);
   });
 
+  it('AVI 2.0 (OpenDML): đoạn RIFF AVIX là VIDEO THẬT — giữ nguyên, không cắt nhầm thành rác', () => {
+    const src = buildAvi({artist: 'Nguyen Van A', avix: true});
+    const result = cleanAvi(src, DEFAULT_CLEAN_OPTIONS);
+    const text = String.fromCharCode(...result.data);
+    expect(result.data.length).toBe(src.length); // không mất byte nào
+    expect(text).toContain('AVIX');
+    expect(text).toContain('SECOND-SEGMENT-FRAME-DATA'); // video đoạn 2 còn nguyên
+    expect(text).not.toContain('Nguyen Van A'); // metadata vẫn bị gột
+    expect(result.removed.every(r => r.kind !== 'trailing')).toBe(true);
+
+    // AVIX + rác thật phía sau: chỉ cắt đúng phần rác
+    const trailing = latin1Encode('RAC-THAT-SU');
+    const src2 = buildAvi({artist: 'X', avix: true, trailing});
+    const result2 = cleanAvi(src2, DEFAULT_CLEAN_OPTIONS);
+    expect(result2.data.length).toBe(src2.length - trailing.length);
+    expect(String.fromCharCode(...result2.data)).toContain('SECOND-SEGMENT-FRAME-DATA');
+  });
+
   it('rác sau vùng RIFF bị cắt; gpsOnly no-op; idempotent; lỗi rõ ràng', () => {
     const trailing = latin1Encode('DU-LIEU-AN-123');
     const src = buildAvi({artist: 'X', trailing});

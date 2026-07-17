@@ -1,6 +1,8 @@
 // Tải file xuống máy người dùng: qua thẻ <a download> (mọi trình duyệt)
 // hoặc File System Access API (Chrome/Edge — lưu thẳng vào thư mục người dùng chọn).
 
+import {uniqueName} from './zip';
+
 interface FsWritable {
   write(data: Blob): Promise<void>;
   close(): Promise<void>;
@@ -38,28 +40,54 @@ export async function saveFileAs(name: string, data: Uint8Array, mime: string): 
   }
 }
 
-/** Lưu cả loạt file vào một thư mục người dùng chọn. Trả số file đã ghi (-1 nếu huỷ). */
+export interface DirectorySaveResult {
+  /** null nếu người dùng huỷ hộp thoại chọn thư mục. */
+  written: number;
+  /** Số file GHI ĐÈ file có sẵn cùng tên trong thư mục đích. */
+  overwritten: number;
+  /** Tên các file ghi thất bại (lỗi giữa chừng). */
+  failed: string[];
+}
+
+/** Lưu cả loạt file vào một thư mục người dùng chọn. Trả null nếu huỷ. */
 export async function saveAllToDirectory(
   files: Array<{name: string; data: Uint8Array}>,
-): Promise<number> {
+): Promise<DirectorySaveResult | null> {
   const w = globalThis as unknown as FsWindow;
-  if (!w.showDirectoryPicker) return -1;
+  if (!w.showDirectoryPicker) return null;
   let dir: FsDirHandle;
   try {
     dir = await w.showDirectoryPicker({mode: 'readwrite'});
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') return -1;
+    if (err instanceof DOMException && err.name === 'AbortError') return null;
     throw err;
   }
-  let written = 0;
+
+  // Khử trùng tên TRONG loạt (2 file hàng đợi cùng tên sẽ ghi đè nhau im lặng)
+  const used = new Set<string>();
+  const result: DirectorySaveResult = {written: 0, overwritten: 0, failed: []};
   for (const f of files) {
-    const handle = await dir.getFileHandle(f.name, {create: true});
-    const writable = await handle.createWritable();
-    await writable.write(new Blob([f.data as Uint8Array<ArrayBuffer>]));
-    await writable.close();
-    written++;
+    const name = uniqueName(f.name, used);
+    try {
+      // Kiểm tra file cùng tên có sẵn trong thư mục đích (để báo ghi đè)
+      let exists = false;
+      try {
+        await dir.getFileHandle(name, {create: false});
+        exists = true;
+      } catch {
+        exists = false;
+      }
+      const handle = await dir.getFileHandle(name, {create: true});
+      const writable = await handle.createWritable();
+      await writable.write(new Blob([f.data as Uint8Array<ArrayBuffer>]));
+      await writable.close();
+      result.written++;
+      if (exists) result.overwritten++;
+    } catch {
+      result.failed.push(name);
+    }
   }
-  return written;
+  return result;
 }
 
 export function downloadBlob(name: string, data: Uint8Array, mime = 'application/octet-stream'): void {

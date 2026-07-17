@@ -11,7 +11,7 @@ import {Spinner} from '@astryxdesign/core/Spinner';
 import {Text} from '@astryxdesign/core/Text';
 import type {QueueItem} from '../state';
 import type {MetadataField, RiskLevel} from '../lib/types';
-import {downloadBlob, mimeForFormat} from '../lib/download';
+import {canUseFileSystemAccess, downloadBlob, mimeForFormat, saveFileAs} from '../lib/download';
 import {InspectorTable} from './InspectorTable';
 import {formatBytes, STATUS_META} from './meta';
 
@@ -76,6 +76,16 @@ export function FileCard({
     }
   };
 
+  const saveTo = () => {
+    if (item.cleaned) {
+      void saveFileAs(
+        downloadName ?? item.outputName ?? item.name,
+        item.cleaned,
+        mimeForFormat(item.convertedTo ?? report?.format),
+      );
+    }
+  };
+
   return (
     <Card padding={4}>
       <VStack gap={3}>
@@ -111,7 +121,12 @@ export function FileCard({
               )}
             <Badge variant={status.variant} label={status.label} />
             {item.status === 'done' && item.cleaned && (
-              <Button label="Tải xuống" variant="secondary" size="sm" onClick={download} />
+              <>
+                {canUseFileSystemAccess() && (
+                  <Button label="Lưu vào…" variant="ghost" size="sm" onClick={saveTo} />
+                )}
+                <Button label="Tải xuống" variant="secondary" size="sm" onClick={download} />
+              </>
             )}
             <Button label="Bỏ" variant="ghost" size="sm" onClick={() => onRemove(item.id)} />
           </HStack>

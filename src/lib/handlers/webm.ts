@@ -111,7 +111,7 @@ export function parseWebm(bytes: Uint8Array): EbmlParseResult {
         if (id.value !== ID_SEGMENT) {
           opaqueFrom = pos;
           warnings.push(
-            'File ghi kiểu streaming (phần tử kích thước không xác định) — phần sau đó không quét được.',
+            'File ghi kiểu streaming (phần tử kích thước không xác định) — metadata nằm SAU điểm này (vd Tags ở cuối file) KHÔNG quét/xoá được. Muốn sạch tuyệt đối, hãy remux file bằng mkvmerge trước.',
           );
         }
       } else {

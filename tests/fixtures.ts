@@ -1053,6 +1053,8 @@ export interface AviFixtureOpts {
   date?: string;
   idit?: string;
   streamName?: string;
+  /** Thêm đoạn RIFF AVIX nối tiếp (chuẩn OpenDML cho file >1GB). */
+  avix?: boolean;
   trailing?: Uint8Array;
 }
 
@@ -1092,6 +1094,17 @@ export function buildAvi(opts: AviFixtureOpts = {}): Uint8Array {
   header.set(latin1Encode('RIFF'));
   new DataView(header.buffer).setUint32(4, body.length, true);
   const parts = [header, body];
+  if (opts.avix) {
+    // Đoạn RIFF AVIX (OpenDML): chứa movi thứ hai — là VIDEO THẬT, không phải rác
+    const avixBody = concatParts([
+      latin1Encode('AVIX'),
+      aviList('movi', aviChunk('00dc', latin1Encode('SECOND-SEGMENT-FRAME-DATA'))),
+    ]);
+    const avixHeader = new Uint8Array(8);
+    avixHeader.set(latin1Encode('RIFF'));
+    new DataView(avixHeader.buffer).setUint32(4, avixBody.length, true);
+    parts.push(avixHeader, avixBody);
+  }
   if (opts.trailing) parts.push(opts.trailing);
   return concatParts(parts);
 }

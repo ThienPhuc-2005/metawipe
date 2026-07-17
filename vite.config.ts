@@ -9,7 +9,9 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt': service worker mới CHỜ tới khi mọi tab đóng mới kích hoạt —
+      // tab đang mở tiếp tục dùng cache cũ, không bị 404 chunk nạp lười giữa chừng
+      registerType: 'prompt',
       injectRegister: 'auto',
       manifest: {
         name: 'MetaWipe — Xoá metadata, 100% trên máy bạn',

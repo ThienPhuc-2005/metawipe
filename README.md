@@ -3,9 +3,11 @@
 Web app xoá thông tin ẩn (EXIF, GPS, tên tác giả, XMP, IPTC…) khỏi ảnh **ngay trong
 trình duyệt** — không có máy chủ, ảnh không bao giờ rời khỏi thiết bị.
 
-Đã xong **Phase 1 + 2 + 3** theo [SPEC-metadata-cleaner.md](SPEC-metadata-cleaner.md):
-ảnh (JPEG, PNG, WebP, GIF, TIFF lossless; HEIC → PNG), video MP4/MOV (không re-encode),
-PDF, Word/Excel/PowerPoint/OpenDocument, và đổi tên file hàng loạt khi tải xuống.
+Đã xong **cả 4 Phase** theo [SPEC-metadata-cleaner.md](SPEC-metadata-cleaner.md):
+ảnh (JPEG, PNG, WebP, GIF, TIFF lossless; HEIC → PNG), video (MP4/MOV, WebM/MKV, AVI —
+không re-encode), PDF, Word/Excel/PowerPoint/OpenDocument, đổi tên file hàng loạt,
+**PWA chạy offline hoàn toàn**, lưu thẳng vào thư mục (Chrome/Edge), sẵn sàng deploy
+GitHub Pages.
 
 ## Chạy thử
 
@@ -23,6 +25,19 @@ npm run dev        # mở http://localhost:5175
 | `npm run typecheck` | Kiểm tra kiểu TypeScript |
 | `npm run build` | Build bản tĩnh vào `dist/` (deploy GitHub Pages được) |
 | `npm run fixtures` | Sinh lại file ảnh mẫu vào `test-fixtures/` |
+
+## Mới trong Phase 4
+
+- **WebM/MKV + AVI**: KHÔNG cần ffmpeg.wasm 25MB như spec đề xuất — parser
+  EBML/RIFF thuần TypeScript, vô hiệu hoá metadata tại chỗ bằng phần tử `Void`
+  (chuẩn Matroska, mkvpropedit cũng làm vậy) và chunk `JUNK` (chuẩn AVI).
+  Xoá: Tags, tiêu đề, thời điểm quay, tên phần mềm, LIST INFO, IDIT.
+- **PWA offline**: cài được như ứng dụng (Add to Home Screen), toàn bộ app kể cả
+  bộ giải mã HEIC được cache — tắt mạng vẫn dùng bình thường (đã kiểm chứng
+  bằng cách tắt server rồi tải lại trang).
+- **Lưu thẳng vào thư mục** (File System Access API, Chrome/Edge): chọn thư mục
+  một lần, cả loạt file sạch được ghi thẳng vào đó.
+- **Sẵn sàng deploy**: git repo + workflow GitHub Actions (test → build → Pages).
 
 ## Mới trong Phase 3
 
@@ -87,7 +102,11 @@ tests/                     # 49 unit test + bộ sinh fixture từng byte
 test-fixtures/             # ảnh mẫu có metadata biết trước (npm run fixtures)
 ```
 
-## Phase tiếp theo (theo spec)
+## Đưa lên mạng (GitHub Pages)
 
-4. PWA offline, ffmpeg.wasm fallback (WebM/AVI), File System Access API, i18n,
-   deploy GitHub Pages (cần tạo git repo).
+Repo git đã sẵn sàng kèm workflow tự động. Chỉ cần:
+1. Tạo repo trên GitHub rồi `git remote add origin <url>` + `git push -u origin main`.
+2. Vào Settings → Pages → Source: **GitHub Actions**.
+3. Mỗi lần push, Actions tự chạy test → build → deploy.
+
+Chưa làm (ghi chú): i18n VI/EN — toàn bộ app hiện là tiếng Việt.

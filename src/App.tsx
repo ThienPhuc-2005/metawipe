@@ -172,10 +172,21 @@ export default function App() {
   const saveAllToFolder = async () => {
     if (doneItems.length === 0) return;
     try {
-      const n = await saveAllToDirectory(
+      const result = await saveAllToDirectory(
         doneItems.map(i => ({name: downloadNameFor(i), data: i.cleaned!})),
       );
-      setDirSaveMessage(n >= 0 ? `Đã lưu ${n} file vào thư mục bạn chọn.` : '');
+      if (!result) {
+        setDirSaveMessage('');
+        return;
+      }
+      let msg = `Đã lưu ${result.written} file vào thư mục bạn chọn.`;
+      if (result.overwritten > 0) {
+        msg += ` Lưu ý: ${result.overwritten} file GHI ĐÈ file trùng tên có sẵn trong thư mục đó.`;
+      }
+      if (result.failed.length > 0) {
+        msg += ` KHÔNG ghi được ${result.failed.length} file: ${result.failed.join(', ')} — hãy dùng nút tải ZIP.`;
+      }
+      setDirSaveMessage(msg);
     } catch {
       setDirSaveMessage('Không lưu được vào thư mục — hãy dùng nút tải ZIP.');
     }

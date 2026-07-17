@@ -43,11 +43,6 @@ export function parseAvi(bytes: Uint8Array): AviParseResult {
   ) {
     throw new CleanerError('corrupt', 'Không phải file AVI hợp lệ (thiếu RIFF/AVI ).');
   }
-  const riffSize = u32le(bytes, 4);
-  const declaredEnd = 8 + riffSize + (riffSize % 2);
-  if (8 + riffSize > bytes.length) {
-    throw new CleanerError('truncated', 'File AVI bị cắt cụt (RIFF size vượt quá cuối file).');
-  }
 
   const chunks: AviChunk[] = [];
   const warnings: string[] = [];
@@ -92,8 +87,28 @@ export function parseAvi(bytes: Uint8Array): AviParseResult {
     }
   }
 
-  walk(12, Math.min(declaredEnd, bytes.length), '', 0);
-  const trailingStart = declaredEnd < bytes.length ? declaredEnd : null;
+  // File AVI >1GB theo chuẩn OpenDML (AVI 2.0) gồm NHIỀU đoạn RIFF nối tiếp:
+  // 'RIFF..AVI ' + 'RIFF..AVIX' + 'RIFF..AVIX'... — tất cả là video thật,
+  // tuyệt đối không được coi là "dữ liệu ẩn" để cắt bỏ.
+  let pos = 0;
+  let segIndex = 0;
+  while (pos + 12 <= bytes.length && asciiAt(bytes, pos, 4) === 'RIFF') {
+    const form = asciiAt(bytes, pos + 8, 4);
+    if (segIndex === 0 ? form !== 'AVI ' : form !== 'AVIX') break;
+    const riffSize = u32le(bytes, pos + 4);
+    if (pos + 8 + riffSize > bytes.length) {
+      throw new CleanerError('truncated', 'File AVI bị cắt cụt (RIFF size vượt quá cuối file).');
+    }
+    const segEnd = pos + 8 + riffSize + (riffSize % 2);
+    walk(pos + 12, Math.min(pos + 8 + riffSize, bytes.length), segIndex === 0 ? '' : `avix${segIndex}`, 0);
+    pos = Math.min(segEnd, bytes.length);
+    segIndex++;
+  }
+  if (segIndex > 1) {
+    warnings.push(`File AVI 2.0 (OpenDML) gồm ${segIndex} đoạn RIFF — tất cả được giữ nguyên.`);
+  }
+
+  const trailingStart = pos < bytes.length ? pos : null;
   return {chunks, trailingStart, warnings};
 }
 
