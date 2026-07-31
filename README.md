@@ -110,3 +110,8 @@ Repo git đã sẵn sàng kèm workflow tự động. Chỉ cần:
 3. Mỗi lần push, Actions tự chạy test → build → deploy.
 
 Chưa làm (ghi chú): i18n VI/EN — toàn bộ app hiện là tiếng Việt.
+
+## Liên hệ
+
+- Facebook: https://www.facebook.com/thien.phuc.450676/
+- Telegram: https://t.me/Benedetta24k
