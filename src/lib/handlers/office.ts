@@ -13,6 +13,7 @@ import {unzipSync, zipSync, type Zippable} from 'fflate';
 import {CleanerError, decodeUtf8} from '../binary';
 import type {CleanOptions, CleanResult, MetadataField, MetadataReport, SegmentInfo} from '../types';
 import {classifyTag} from '../risk';
+import {summarizeEmbeddedImage} from '../embedded-image';
 import {detectFormat} from '../detect';
 import {cleanJpeg, inspectJpeg} from './jpeg';
 import {cleanPng, inspectPng} from './png';
@@ -442,8 +443,7 @@ export async function inspectOffice(bytes: Uint8Array): Promise<MetadataReport> 
     );
   }
 
-  // Ảnh nhúng: đọc bằng chính handler ảnh. GPS gộp thành một trường nhóm GPS (để điểm
-  // riêng tư phạt đúng mức), các trường lộ thông tin khác gộp thành một dòng mỗi ảnh
+  // Ảnh nhúng: đọc bằng chính handler ảnh rồi tóm tắt (GPS + một dòng mỗi ảnh)
   for (const [path, data] of Object.entries(entries)) {
     const handler = embeddedImageHandler(path, data);
     if (!handler) continue;
@@ -455,32 +455,9 @@ export async function inspectOffice(bytes: Uint8Array): Promise<MetadataReport> 
       warnings.push(`Không đọc được ảnh nhúng ${name}.`);
       continue;
     }
-    const gps = report.fields.find(f => f.group === 'GPS' && f.mapUrl) ?? report.fields.find(f => f.group === 'GPS');
-    if (gps) {
-      fields.push({
-        id: `office:image:${path}:gps`,
-        group: 'GPS',
-        tag: `Toạ độ GPS trong ảnh nhúng (${name})`,
-        value: gps.mapUrl ? gps.value : 'có',
-        risk: 'high',
-        mapUrl: gps.mapUrl,
-      });
-    }
-    // ICC là hồ sơ màu chung của thiết bị, giữ theo tuỳ chọn — không tính là lộ thông tin
-    const exposed = report.fields.filter(f => f.group !== 'GPS' && f.group !== 'ICC' && f.risk !== 'low');
-    const tags = [...new Set(exposed.map(f => f.tag))];
-    if (report.trailingBytes > 0) tags.push('dữ liệu ẩn sau ảnh');
-    if (tags.length > 0) {
-      fields.push({
-        id: `office:image:${path}`,
-        group: 'Office',
-        tag: `Metadata trong ảnh nhúng (${name})`,
-        value: `${tags.length} trường: ${tags.slice(0, 8).join(', ')}${tags.length > 8 ? '…' : ''}`,
-        risk: exposed.some(f => f.risk === 'high') || report.trailingBytes > 0 ? 'high' : 'medium',
-      });
-    }
-    const metaBytes = report.metaSegments.filter(s => s.kind !== 'icc').reduce((sum, s) => sum + s.bytes, 0);
-    if (metaBytes > 0) metaSegments.push({kind: 'embedded-image', bytes: metaBytes, note: path});
+    const summary = summarizeEmbeddedImage(report, `office:image:${path}`, name, 'Office');
+    fields.push(...summary.fields);
+    if (summary.metaBytes > 0) metaSegments.push({kind: 'embedded-image', bytes: summary.metaBytes, note: path});
   }
 
   // ODF meta.xml
