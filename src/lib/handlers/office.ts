@@ -6,13 +6,54 @@
 // - Tên người trong nội dung: comment (Word/Excel/PowerPoint), tracked changes,
 //   people.xml/persons — ẩn danh hoá thành "Người dùng" (giữ cấu trúc để không hỏng file)
 // - ODF: meta.xml → bản rỗng; entry 'mimetype' giữ đứng đầu và KHÔNG nén
+// - Ảnh nhúng (word/media, xl/media, ppt/media, Pictures/...) → chạy qua đúng handler
+//   ảnh như file lẻ: ảnh chụp điện thoại dán vào Word vẫn mang nguyên EXIF/GPS!
 
 import {unzipSync, zipSync, type Zippable} from 'fflate';
 import {CleanerError, decodeUtf8} from '../binary';
 import type {CleanOptions, CleanResult, MetadataField, MetadataReport, SegmentInfo} from '../types';
 import {classifyTag} from '../risk';
+import {detectFormat} from '../detect';
+import {cleanJpeg, inspectJpeg} from './jpeg';
+import {cleanPng, inspectPng} from './png';
+import {cleanWebp, inspectWebp} from './webp';
+import {cleanGif, inspectGif} from './gif';
+import {cleanTiff, inspectTiff} from './tiff';
 
 const ANON = 'Người dùng';
+
+interface EmbeddedImageHandler {
+  inspect(bytes: Uint8Array): Promise<MetadataReport>;
+  clean(bytes: Uint8Array, options: CleanOptions): CleanResult;
+}
+
+/**
+ * Handler cho ảnh nhúng — chỉ các định dạng strip ĐỒNG BỘ, tại chỗ (HEIC phải đổi
+ * sang PNG, kéo theo đổi tên + content-type trong gói nên không làm ở đây).
+ * Import thẳng từng handler thay vì qua handlers/index để tránh vòng import.
+ */
+const EMBEDDED_IMAGE_HANDLERS: Record<string, EmbeddedImageHandler> = {
+  jpeg: {inspect: inspectJpeg, clean: cleanJpeg},
+  png: {inspect: inspectPng, clean: cleanPng},
+  webp: {inspect: inspectWebp, clean: cleanWebp},
+  gif: {inspect: inspectGif, clean: cleanGif},
+  tiff: {inspect: inspectTiff, clean: cleanTiff},
+};
+
+/** Nhận diện ảnh nhúng bằng magic bytes — không tin đuôi file trong gói. */
+function embeddedImageHandler(path: string, data: Uint8Array): EmbeddedImageHandler | null {
+  if (data.length === 0 || /\.(xml|rels)$/i.test(path)) return null;
+  try {
+    return EMBEDDED_IMAGE_HANDLERS[detectFormat(data).format] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function baseName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1);
+}
+
 
 const EMPTY_CORE_XML =
   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' +
@@ -186,14 +227,27 @@ export function cleanOffice(bytes: Uint8Array, options: CleanOptions): CleanResu
   const removed: SegmentInfo[] = [];
   const notes: string[] = [];
 
-  if (options.gpsOnly) {
-    notes.push('Tài liệu Office không chứa toạ độ GPS dạng chuẩn — chế độ "chỉ xoá GPS" không thay đổi gì.');
-    return {data: bytes.slice(), removed, bytesRemoved: 0, notes};
-  }
-
   const out: Record<string, [Uint8Array, {level: number}]> = Object.create(null);
   const isOdf = kind === 'odt' || kind === 'ods' || kind === 'odp' || kind === 'odf';
   let anonymized = 0;
+  let imagesCleaned = 0;
+  let imageBytesRemoved = 0;
+  const imagesFailed: string[] = [];
+
+  // Ảnh nhúng dùng CÙNG tuỳ chọn với file lẻ (chỉ xoá GPS / giữ ICC / giữ hướng xoay)
+  const cleanImage = (path: string, data: Uint8Array, handler: EmbeddedImageHandler): Uint8Array => {
+    try {
+      const result = handler.clean(data, options);
+      if (result.removed.length === 0) return data;
+      imagesCleaned++;
+      imageBytesRemoved += Math.max(0, data.length - result.data.length);
+      return result.data;
+    } catch {
+      // Ảnh hỏng: giữ nguyên để tài liệu không mất hình — nhưng phải báo rõ, không trấn an
+      imagesFailed.push(baseName(path));
+      return data;
+    }
+  };
 
   for (const [path, data] of Object.entries(entries)) {
     // ODF: mimetype phải đứng đầu và KHÔNG nén — giữ nguyên như bản gốc
@@ -201,6 +255,13 @@ export function cleanOffice(bytes: Uint8Array, options: CleanOptions): CleanResu
       out[path] = [data, {level: 0}];
       continue;
     }
+    const imageHandler = embeddedImageHandler(path, data);
+    if (options.gpsOnly) {
+      // Chỉ xoá GPS: toạ độ chỉ có thể nằm trong ảnh nhúng — mọi phần khác giữ nguyên
+      out[safeEntry(path)] = [imageHandler ? cleanImage(path, data, imageHandler) : data, {level: 6}];
+      continue;
+    }
+
     if (isOdf && path === 'meta.xml') {
       out[path] = [utf8Encode(EMPTY_ODF_META), {level: 6}];
       removed.push({kind: 'office-meta', bytes: data.length, note: 'meta.xml (tác giả, ngày giờ, số lần sửa)'});
@@ -241,6 +302,10 @@ export function cleanOffice(bytes: Uint8Array, options: CleanOptions): CleanResu
       out[path] = [utf8Encode(xml), {level: 6}];
       continue;
     }
+    if (imageHandler) {
+      out[safeEntry(path)] = [cleanImage(path, data, imageHandler), {level: 6}];
+      continue;
+    }
     if (isAuthorBearing(path)) {
       const [xml, count] = anonymizeAuthors(decodeUtf8(data), path);
       anonymized += count;
@@ -258,6 +323,28 @@ export function cleanOffice(bytes: Uint8Array, options: CleanOptions): CleanResu
     out[safeEntry(path)] = [data, {level: 6}];
   }
 
+  if (imagesFailed.length > 0) {
+    notes.push(
+      `Cảnh báo: không đọc được ${imagesFailed.length} ảnh nhúng (${imagesFailed.slice(0, 5).join(', ')}) — các ảnh này được giữ nguyên và CÓ THỂ còn metadata.`,
+    );
+  }
+  if (options.gpsOnly) {
+    if (imagesCleaned === 0) {
+      notes.push('Không có ảnh nhúng nào chứa toạ độ GPS — chế độ "chỉ xoá GPS" không thay đổi gì.');
+      return {data: bytes.slice(), removed, bytesRemoved: 0, notes};
+    }
+    removed.push({kind: 'embedded-image', bytes: imageBytesRemoved, note: `đã gỡ GPS khỏi ${imagesCleaned} ảnh nhúng`});
+    const data = zipSync(out as unknown as Zippable);
+    return {data, removed, bytesRemoved: Math.max(0, bytes.length - data.length), notes};
+  }
+  if (imagesCleaned > 0) {
+    removed.push({
+      kind: 'embedded-image',
+      bytes: imageBytesRemoved,
+      note: `metadata (EXIF/GPS/XMP...) trong ${imagesCleaned} ảnh nhúng`,
+    });
+    notes.push(`Đã xoá metadata trong ${imagesCleaned} ảnh nhúng (ảnh giữ nguyên chất lượng, không nén lại).`);
+  }
   if (anonymized > 0) {
     removed.push({kind: 'authors', bytes: 0, note: `${anonymized} chỗ ghi tên người (comment, tracked changes) đã ẩn danh hoá`});
     notes.push(`Đã ẩn danh hoá ${anonymized} chỗ ghi tên người trong nội dung thành "${ANON}" (giữ nguyên comment/tracked changes).`);
@@ -353,6 +440,47 @@ export async function inspectOffice(bytes: Uint8Array): Promise<MetadataReport> 
       [...authors].slice(0, 10).join(', '),
       'high',
     );
+  }
+
+  // Ảnh nhúng: đọc bằng chính handler ảnh. GPS gộp thành một trường nhóm GPS (để điểm
+  // riêng tư phạt đúng mức), các trường lộ thông tin khác gộp thành một dòng mỗi ảnh
+  for (const [path, data] of Object.entries(entries)) {
+    const handler = embeddedImageHandler(path, data);
+    if (!handler) continue;
+    const name = baseName(path);
+    let report: MetadataReport;
+    try {
+      report = await handler.inspect(data);
+    } catch {
+      warnings.push(`Không đọc được ảnh nhúng ${name}.`);
+      continue;
+    }
+    const gps = report.fields.find(f => f.group === 'GPS' && f.mapUrl) ?? report.fields.find(f => f.group === 'GPS');
+    if (gps) {
+      fields.push({
+        id: `office:image:${path}:gps`,
+        group: 'GPS',
+        tag: `Toạ độ GPS trong ảnh nhúng (${name})`,
+        value: gps.mapUrl ? gps.value : 'có',
+        risk: 'high',
+        mapUrl: gps.mapUrl,
+      });
+    }
+    // ICC là hồ sơ màu chung của thiết bị, giữ theo tuỳ chọn — không tính là lộ thông tin
+    const exposed = report.fields.filter(f => f.group !== 'GPS' && f.group !== 'ICC' && f.risk !== 'low');
+    const tags = [...new Set(exposed.map(f => f.tag))];
+    if (report.trailingBytes > 0) tags.push('dữ liệu ẩn sau ảnh');
+    if (tags.length > 0) {
+      fields.push({
+        id: `office:image:${path}`,
+        group: 'Office',
+        tag: `Metadata trong ảnh nhúng (${name})`,
+        value: `${tags.length} trường: ${tags.slice(0, 8).join(', ')}${tags.length > 8 ? '…' : ''}`,
+        risk: exposed.some(f => f.risk === 'high') || report.trailingBytes > 0 ? 'high' : 'medium',
+      });
+    }
+    const metaBytes = report.metaSegments.filter(s => s.kind !== 'icc').reduce((sum, s) => sum + s.bytes, 0);
+    if (metaBytes > 0) metaSegments.push({kind: 'embedded-image', bytes: metaBytes, note: path});
   }
 
   // ODF meta.xml
